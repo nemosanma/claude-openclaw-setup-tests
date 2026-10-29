@@ -168,7 +168,31 @@ function Invoke-GitBashFile([string]$Body, [int]$TimeoutSec = 120) {
     return Invoke-Captured -File $bash -ArgumentList @("--noprofile", "--norc", $unix) -TimeoutSec $TimeoutSec
 }
 
+function Get-OpenClawEntry {
+    $root = Join-Path $env:APPDATA "npm\node_modules\openclaw"
+    $pkgPath = Join-Path $root "package.json"
+    if (-not (Test-Path $pkgPath)) { return $null }
+    $pkg = Get-Content -LiteralPath $pkgPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $rel = $null
+    if ($pkg.bin -is [string]) { $rel = [string]$pkg.bin }
+    elseif ($pkg.bin.openclaw) { $rel = [string]$pkg.bin.openclaw }
+    if (-not $rel) { return $null }
+    $entry = Join-Path $root ($rel -replace "/", "\")
+    if (Test-Path -LiteralPath $entry) { return $entry }
+    return $null
+}
+
 function Invoke-Tool([string]$Name, [string[]]$UserArgs, [int]$TimeoutSec = 180, [string]$WorkingDirectory = $Root) {
+    # The npm-generated openclaw.cmd shim runs `"node"` (quotes included) when
+    # started from another cmd.exe. Call the package entry with node.exe instead.
+    if ($Name -eq "openclaw") {
+        Update-SessionPath
+        $node = Get-Command node.exe -ErrorAction SilentlyContinue
+        $entry = Get-OpenClawEntry
+        if ($node -and $entry) {
+            return Invoke-Captured -File $node.Source -ArgumentList (@($entry) + $UserArgs) -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
+        }
+    }
     $launch = Resolve-Launch $Name $UserArgs
     if ($launch.ArgumentString) {
         return Invoke-Captured -File $launch.File -ArgumentString $launch.ArgumentString -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
@@ -477,7 +501,13 @@ try {
 
     Invoke-Step "openclaw health" {
         Update-SessionPath
-        $launch = Resolve-Launch "openclaw" @("gateway", "run")
+        $node = Get-Command node.exe -ErrorAction SilentlyContinue
+        $entry = Get-OpenClawEntry
+        if ($node -and $entry) {
+            $launch = @{ File = $node.Source; Args = @($entry, "gateway", "run"); ArgumentString = $null }
+        } else {
+            $launch = Resolve-Launch "openclaw" @("gateway", "run")
+        }
         $gwOut = Join-Path $LogDir "gateway.out"
         $gwErr = Join-Path $LogDir "gateway.err"
         $psi = New-Object System.Diagnostics.ProcessStartInfo
