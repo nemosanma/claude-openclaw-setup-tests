@@ -79,17 +79,35 @@ function Update-SessionPath {
 }
 
 function Resolve-Launch([string]$Name, [string[]]$UserArgs) {
-    $cmd = Get-Command $Name -ErrorAction Stop
-    $src = $cmd.Source
-    if ($src -like "*.cmd" -or $src -like "*.bat") {
-        $parts = @('"' + $src + '"')
-        foreach ($arg in $UserArgs) {
-            if ($arg -match '[\s"]') { $parts += '"' + ($arg -replace '"', '\"') + '"' }
-            else { $parts += $arg }
-        }
-        return @{ File = $env:ComSpec; Args = @("/d", "/c", ($parts -join " ")) }
+    # npm on Windows also drops an extensionless shell script named "openclaw".
+    # Start-Process cannot execute that file (%1 is not a valid Win32 application).
+    $candidates = @()
+    foreach ($c in @(Get-Command $Name -All -ErrorAction SilentlyContinue)) { $candidates += $c.Source }
+    $candidates += (Join-Path $env:USERPROFILE ".local\bin\$Name.exe")
+    $candidates += (Join-Path $env:APPDATA "npm\$Name.cmd")
+    $candidates += (Join-Path $env:USERPROFILE ".local\bin\$Name.cmd")
+    $chosen = $null
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath $c) -and ($c -like "*.exe")) { $chosen = $c; break }
     }
-    return @{ File = $src; Args = $UserArgs }
+    if (-not $chosen) {
+        foreach ($c in $candidates) {
+            if ($c -and (Test-Path -LiteralPath $c) -and ($c -like "*.cmd" -or $c -like "*.bat")) { $chosen = $c; break }
+        }
+    }
+    if (-not $chosen) {
+        throw "Could not find an .exe or .cmd for $Name. Saw: $($candidates -join ' | ')"
+    }
+    if ($chosen -like "*.exe") {
+        return @{ File = $chosen; Args = $UserArgs }
+    }
+    $parts = @('"' + $chosen + '"')
+    foreach ($arg in $UserArgs) {
+        if ($null -eq $arg -or $arg -eq "") { continue }
+        if ($arg -match '[\s"]') { $parts += '"' + ($arg -replace '"', '\"') + '"' }
+        else { $parts += $arg }
+    }
+    return @{ File = $env:ComSpec; Args = @("/d", "/c", ($parts -join " ")) }
 }
 
 function Invoke-Captured {
@@ -99,24 +117,46 @@ function Invoke-Captured {
         [int]$TimeoutSec = 180,
         [string]$WorkingDirectory = $Root
     )
-    $base = Join-Path $LogDir ("cap-" + [guid]::NewGuid().ToString("N"))
-    $out = "$base.out"
-    $err = "$base.err"
-    $proc = Start-Process -FilePath $File -ArgumentList $ArgumentList -WorkingDirectory $WorkingDirectory `
-        -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
-    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-        $text = "TIMEOUT after ${TimeoutSec}s`n"
-        if (Test-Path $out) { $text += (Get-Content $out -Raw -ErrorAction SilentlyContinue) }
-        if (Test-Path $err) { $text += (Get-Content $err -Raw -ErrorAction SilentlyContinue) }
-        return @{ Exit = 124; Text = [string]$text }
+    # One argument string so Start-Process does not split a bash -lc script on spaces.
+    $quoted = @()
+    foreach ($a in $ArgumentList) {
+        if ($null -eq $a) { continue }
+        if ($a -match '[\s"]') { $quoted += '"' + ($a.Replace('\', '\\').Replace('"', '\"')) + '"' }
+        else { $quoted += $a }
     }
-    $text = ""
-    if (Test-Path $out) { $text += [string](Get-Content $out -Raw -ErrorAction SilentlyContinue) }
-    if (Test-Path $err) { $text += [string](Get-Content $err -Raw -ErrorAction SilentlyContinue) }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $File
+    $psi.Arguments = ($quoted -join " ")
+    $psi.WorkingDirectory = $WorkingDirectory
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    # Read stderr asynchronously so a full pipe cannot deadlock the child.
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $outText = $proc.StandardOutput.ReadToEnd()
+    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+        try { $proc.Kill($true) } catch { try { $proc.Kill() } catch {} }
+        return @{ Exit = 124; Text = "TIMEOUT after ${TimeoutSec}s`n$outText" }
+    }
+    $proc.WaitForExit()
+    $errText = $errTask.GetAwaiter().GetResult()
     $code = $proc.ExitCode
     if ($null -eq $code) { $code = 1 }
-    return @{ Exit = $code; Text = $text }
+    return @{ Exit = $code; Text = ($outText + $errText) }
+}
+
+function Invoke-GitBashFile([string]$Body, [int]$TimeoutSec = 120) {
+    $bash = Join-Path $env:ProgramFiles "Git\bin\bash.exe"
+    $path = Join-Path $LogDir ("bash-" + [guid]::NewGuid().ToString("N") + ".sh")
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    $text = ($Body -replace "`r`n", "`n").TrimEnd() + "`n"
+    [System.IO.File]::WriteAllText($path, $text, $utf8)
+    $unix = (& $bash --noprofile --norc -lc "cygpath -u '$path'").Trim()
+    return Invoke-Captured -File $bash -ArgumentList @("--noprofile", "--norc", $unix) -TimeoutSec $TimeoutSec
 }
 
 function Invoke-Tool([string]$Name, [string[]]$UserArgs, [int]$TimeoutSec = 180, [string]$WorkingDirectory = $Root) {
@@ -362,16 +402,10 @@ try {
         $tokenLine = ""
         $how = ""
         if (Test-Path $bash) {
-            $envFile = Join-Path $dir ".env"
-            $ran = Invoke-Captured -File $bash -TimeoutSec 30 -ArgumentList @(
-                "--noprofile", "--norc", "-lc",
-                "bash templates/scripts/gen-gateway-token.sh >> ~/.openclaw/.env"
-            )
-            $how = "gen-gateway-token.sh via Git Bash, exit $($ran.Exit). $($ran.Text)"
-            if (Test-Path $envFile) {
-                $line = (Get-Content $envFile | Where-Object { $_ -like "OPENCLAW_GATEWAY_TOKEN=*" } | Select-Object -Last 1)
-                if ($line) { $tokenLine = $line.Substring("OPENCLAW_GATEWAY_TOKEN=".Length).Trim() }
-            }
+            $ran = Invoke-GitBashFile "bash templates/scripts/gen-gateway-token.sh" 30
+            $how = "gen-gateway-token.sh via Git Bash, exit $($ran.Exit). "
+            $match = [regex]::Match([string]$ran.Text, "OPENCLAW_GATEWAY_TOKEN=([0-9a-fA-F]{64})")
+            if ($match.Success) { $tokenLine = $match.Groups[1].Value }
         }
         if (-not $tokenLine -or $tokenLine.Length -ne 64) {
             $bytes = New-Object byte[] 32
@@ -434,8 +468,27 @@ try {
         $launch = Resolve-Launch "openclaw" @("gateway", "run")
         $gwOut = Join-Path $LogDir "gateway.out"
         $gwErr = Join-Path $LogDir "gateway.err"
-        $script:GatewayProc = Start-Process -FilePath $launch.File -ArgumentList $launch.Args -WorkingDirectory $Root `
-            -PassThru -NoNewWindow -RedirectStandardOutput $gwOut -RedirectStandardError $gwErr
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $launch.File
+        $psi.WorkingDirectory = $Root
+        if ($launch.File -eq $env:ComSpec) {
+            $psi.Arguments = (($launch.Args -join " ") + " 1>`"$gwOut`" 2>`"$gwErr`"")
+            $psi.RedirectStandardOutput = $false
+            $psi.RedirectStandardError = $false
+        } else {
+            $psi.Arguments = ($launch.Args -join " ")
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+        }
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $script:GatewayProc = New-Object System.Diagnostics.Process
+        $script:GatewayProc.StartInfo = $psi
+        [void]$script:GatewayProc.Start()
+        if ($psi.RedirectStandardOutput) {
+            $script:GatewayProc.BeginOutputReadLine()
+            $script:GatewayProc.BeginErrorReadLine()
+        }
         $healthy = $false
         $last = ""
         for ($i = 0; $i -lt 40; $i++) {
@@ -531,10 +584,8 @@ try {
         }
         $jqDir = Join-Path $LogDir "bin"
         $jqUnix = (& $bash --noprofile --norc -lc "cygpath -u '$jqDir'").Trim()
-        $ran = Invoke-Captured -File $bash -TimeoutSec 120 -ArgumentList @(
-            "--noprofile", "--norc", "-lc",
-            "export PATH='$jqUnix':`$PATH; bash templates/claude-code/hooks/test-hooks.sh"
-        )
+        $hookBody = "export PATH='$jqUnix':" + '$PATH' + "`nbash templates/claude-code/hooks/test-hooks.sh`n"
+        $ran = Invoke-GitBashFile $hookBody 120
         $ok = ($ran.Exit -eq 0) -and ($ran.Text -match "25 cases, 0 failed")
         @{ Ok = [bool]$ok; Detail = "exit $($ran.Exit). $($ran.Text)" }
     }
@@ -547,6 +598,8 @@ try {
         $jqDir = Join-Path $LogDir "bin"
         $jqUnix = (& $bash --noprofile --norc -lc "cygpath -u '$jqDir'").Trim()
         $py = Get-Command python -ErrorAction SilentlyContinue
+        $env:PYTHONUTF8 = "1"
+        $env:PYTHONIOENCODING = "utf-8"
         $pipNote = "python not on PATH"
         if ($py) {
             $pip = Invoke-Captured -File $py.Source -TimeoutSec 180 -ArgumentList @("-m", "pip", "install", "--user", "jsonschema", "pyyaml")
@@ -576,10 +629,7 @@ bash templates/scripts/validate-templates.sh
         if (-not (Test-Path $bash)) {
             return @{ Status = "SKIP"; Detail = "Git Bash missing; skill-audit.sh is Bash." }
         }
-        $ran = Invoke-Captured -File $bash -TimeoutSec 60 -ArgumentList @(
-            "--noprofile", "--norc", "-lc",
-            "bash templates/scripts/skill-audit.sh templates/openclaw/workspace-skills && bash templates/scripts/skill-audit.sh templates/claude-code/skills"
-        )
+        $ran = Invoke-GitBashFile "bash templates/scripts/skill-audit.sh templates/openclaw/workspace-skills && bash templates/scripts/skill-audit.sh templates/claude-code/skills" 60
         @{ Ok = ($ran.Exit -eq 0); Detail = "exit $($ran.Exit). $($ran.Text)" }
     }
 
@@ -590,10 +640,7 @@ bash templates/scripts/validate-templates.sh
         if (-not (Test-Path $bash)) {
             return @{ Status = "SKIP"; Detail = "apply-claude-preset.sh is Bash. Git Bash is missing and WSL is not available." }
         }
-        $ran = Invoke-Captured -File $bash -TimeoutSec 60 -ArgumentList @(
-            "--noprofile", "--norc", "-lc",
-            "mkdir -p ~/code/my-app && bash templates/scripts/apply-claude-preset.sh balanced ~/code/my-app && cp templates/claude-code/claude-md/CLAUDE.webapp.md ~/code/my-app/CLAUDE.md"
-        )
+        $ran = Invoke-GitBashFile "mkdir -p `"`$HOME/code/my-app`" && bash templates/scripts/apply-claude-preset.sh balanced `"`$HOME/code/my-app`" && cp templates/claude-code/claude-md/CLAUDE.webapp.md `"`$HOME/code/my-app/CLAUDE.md`"" 60
         if ($ran.Exit -ne 0) { return @{ Ok = $false; Detail = $ran.Text } }
         $doc = Invoke-Tool "claude" @("doctor") 180 $proj
         $bad = $doc.Text -match "Invalid settings"

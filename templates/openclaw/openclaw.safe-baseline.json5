@@ -38,7 +38,10 @@
 
   tools: {
     profile: "messaging",
-    deny: ["group:automation", "group:runtime", "group:fs", "sessions_spawn", "sessions_send"],
+    // "read" lets the agent open SKILL.md files (skills do not work without it).
+    // fs.workspaceOnly keeps reads inside ~/.openclaw/workspace (tested: reading ~/.openclaw/openclaw.json is refused).
+    alsoAllow: ["read"],
+    deny: ["group:automation", "group:runtime", "write", "edit", "apply_patch", "sessions_spawn", "sessions_send"],
     fs: { workspaceOnly: true },
     exec: { security: "deny", ask: "always" },
     elevated: { enabled: false },

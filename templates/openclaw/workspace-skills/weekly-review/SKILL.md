@@ -13,6 +13,6 @@ Ask these one at a time, waiting for each answer:
 3. What are the three most important outcomes for next week?
 4. Anything to stop doing?
 
-Then write `reviews/YYYY-Www.md` with the answers as tidy bullets plus a
+Then, if a `write` tool is available, write `reviews/YYYY-Www.md` (otherwise reply in chat) with the answers as tidy bullets plus a
 "Next week" checklist. Keep the tone neutral and brief. Do not schedule, send, or
 create anything outside the workspace.

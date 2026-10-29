@@ -39,6 +39,8 @@ Runners have no TTY and no browser login. The workflow therefore:
 
 No `*_API_KEY` variables are set. Jobs do not use repository secrets.
 
+Guide text that failed on these runners, with suggested wording, is in [FINDINGS.md](FINDINGS.md).
+
 ## What this does not test
 
 Signing in to Claude, any real model call, a real Telegram/WhatsApp/Discord bot, ClawHub installs, `openclaw gateway install` as a system service, Docker sandboxing, and Tailscale. Those need credentials or machine features these runners do not have.

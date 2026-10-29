@@ -49,6 +49,8 @@ if command -v openclaw >/dev/null; then
     grep -Eq 'bind:[[:space:]]*"?(lan|custom|auto)|"bind":[[:space:]]*"(lan|custom|auto)"' "$cfg" && bad "gateway.bind is not loopback — read the exposure runbook first"
     grep -Eq 'dmPolicy:[[:space:]]*"open"|"dmPolicy":[[:space:]]*"open"' "$cfg" && bad "a channel uses dmPolicy \"open\" — anyone can message your agent"
     grep -Eq '"profile":[[:space:]]*"full"|profile:[[:space:]]*"full"' "$cfg" && wn "tools.profile is \"full\" — consider \"messaging\" or \"coding\""
+    grep -Eq '"model":[[:space:]]*"anthropic/claude-opus|model:[[:space:]]*"anthropic/claude-opus' "$cfg" && wn "an agent or default is pinned to an Opus model (onboarding does this when you add a key) — check agents.entries.*.model"
+    grep -q 'sk-ant-' "$cfg" && bad "config contains what looks like a plaintext Anthropic key — move it to an env var / SecretRef"
   fi
   [ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ] && [ "${#OPENCLAW_GATEWAY_TOKEN}" -lt 32 ] && wn "OPENCLAW_GATEWAY_TOKEN is short (<32 chars)"
 else

@@ -152,7 +152,40 @@ adopt_tool_paths() {
     fi
   fi
   prepend_path "$HOME/.local/bin"
+  # Official Node unpacked by ensure_supported_node must stay ahead of Homebrew's node.
+  prepend_path "$HOME/.local/node/bin"
   hash -r 2>/dev/null || true
+}
+
+# OpenClaw 2026.10.8 accepts only Node >=24.22.1 <25 or >=26.12.1.
+node_meets_openclaw() {
+  command -v node >/dev/null 2>&1 || return 1
+  node -e 'const p=process.versions.node.split(".").map(Number); const [M,m,pat]=p; const t=(M*1000000)+(m*1000)+pat; const ok=(M===24 && t>=24022001) || t>=26012001; process.exit(ok?0:1)'
+}
+
+install_official_node_24() {
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) plat="linux-x64" ;;
+    Linux-aarch64|Linux-arm64) plat="linux-arm64" ;;
+    Darwin-arm64) plat="darwin-arm64" ;;
+    Darwin-x86_64) plat="darwin-x64" ;;
+    *) echo "no official Node build for $(uname -s)-$(uname -m)"; return 1 ;;
+  esac
+  sums="$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt)"
+  file="$(printf '%s\n' "$sums" | awk -v p="$plat" 'index($2, p ".tar.gz") {print $2; exit}')"
+  ver="$(printf '%s' "$file" | sed -E 's/^node-v([0-9.]+)-.*/\1/')"
+  if [ -z "$ver" ] || [ -z "$file" ]; then
+    echo "could not resolve latest Node 24 tarball"
+    return 1
+  fi
+  echo "downloading https://nodejs.org/dist/v${ver}/${file}"
+  curl -fsSL "https://nodejs.org/dist/v${ver}/${file}" -o "/tmp/${file}"
+  rm -rf "$HOME/.local/node"
+  mkdir -p "$HOME/.local/node"
+  tar -xzf "/tmp/${file}" -C "$HOME/.local/node" --strip-components=1
+  prepend_path "$HOME/.local/node/bin"
+  hash -r 2>/dev/null || true
+  echo "official node now $(node -v) ($(command -v node))"
 }
 
 stop_gateway() {
@@ -262,6 +295,7 @@ note "OpenClaw installer is run with \`--no-onboard --no-prompt\`. The guide's t
 note "PATH is updated in this shell after each installer. The guide's fix for \`command not found\` is to open a new terminal after editing ~/.bashrc or ~/.zshrc."
 note "Onboarding uses \`--auth-choice skip\` and a generated gateway token. No API key is set."
 note "The gateway is started in the background (the guide runs it in a second terminal) and stopped before \`openclaw doctor\`."
+note "If \`node -v\` is outside OpenClaw's range (>=24.22.1 on the 24.x line, or >=26.12.1), the harness downloads the current Node 24 tarball from nodejs.org into ~/.local/node and puts it first on PATH before the OpenClaw installer. The guide commands that produced the wrong Node are recorded in FINDINGS.md."
 
 # Drop inherited API keys and a stray npm prefix (guide 1.4). Never print values.
 key_names="$(env | awk -F= '/_API_KEY=/ {print $1}' | tr '\n' ' ' || true)"
@@ -310,7 +344,7 @@ if [ "$platform" = "linux" ]; then
   run_optional "Validator extras: shellcheck python3-jsonschema python3-yaml" 300 sudo apt-get install -y shellcheck python3 python3-jsonschema python3-yaml
 elif [ "$platform" = "macos" ]; then
   run_optional "Validator extras: brew install shellcheck" 600 brew install shellcheck
-  run_optional "Validator extras: pip install jsonschema pyyaml" 300 python3 -m pip install --user jsonschema pyyaml
+  run_optional "Validator extras: pip install jsonschema pyyaml" 300 python3 -m pip install --user --break-system-packages jsonschema pyyaml
 fi
 
 # --- Claude Code native installer (guide 2.1) ---
@@ -375,6 +409,26 @@ if [ "$ec" -eq 0 ] && ! grep -q 'Invalid settings' "$log"; then
   append_result "$step_n" PASS "user settings + claude doctor" "exit 0, no Invalid settings. $detail"
 else
   append_result "$step_n" FAIL "user settings + claude doctor" "exit $ec. $detail"
+fi
+
+# The guide's own Node install can leave a version OpenClaw rejects (see FINDINGS.md).
+# Put a Node 24 build from nodejs.org first on PATH, then run the installer unchanged.
+step_n=$((step_n + 1))
+log="$(mklog "$step_n" "node before openclaw")"
+{
+  echo "node before: $(node -v 2>/dev/null || echo missing) ($(command -v node 2>/dev/null || echo none))"
+  if node_meets_openclaw; then
+    echo "already meets OpenClaw >=24.22.1 <25 or >=26.12.1"
+  else
+    echo "installing official Node 24 because the guide's Node is outside OpenClaw's range"
+    install_official_node_24
+  fi
+  echo "node after: $(node -v 2>/dev/null || echo missing) ($(command -v node 2>/dev/null || echo none))"
+} >"$log" 2>&1
+if node_meets_openclaw; then
+  append_result "$step_n" PASS "Node meets OpenClaw before install" "$(cat "$log")"
+else
+  append_result "$step_n" FAIL "Node meets OpenClaw before install" "$(cat "$log")"
 fi
 
 # --- OpenClaw (guide 5.1) ---
