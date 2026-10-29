@@ -101,6 +101,27 @@ claude --version
 
 The Windows OpenClaw installer (`iwr -useb https://openclaw.ai/install.ps1 | iex` with `OPENCLAW_NO_ONBOARD=1`) did install OpenClaw 2026.10.8. It replaced the runner's Node 22.23.4 with **Node 26.13.0** via `winget install OpenJS.NodeJS.LTS`, which meets the floor. The guide's one-liner cannot take `-NoOnboard`; without `OPENCLAW_NO_ONBOARD=1` it starts the interactive wizard.
 
+## Windows: `openclaw.cmd` fails with `'"node"' is not recognized` when started from `cmd /c`
+
+After `iwr -useb https://openclaw.ai/install.ps1 | iex` with `OPENCLAW_NO_ONBOARD=1`, OpenClaw 2026.10.8 was installed. Running the npm shim through another `cmd.exe /c` (what many automation hosts do) failed every time:
+
+```text
+'"node"' is not recognized as an internal or external command,
+operable program or batch file.
+```
+
+The quotes are part of the program name. npm's generated `openclaw.cmd` uses an `endlocal & goto` trick that breaks when the shim is not `CALL`ed from an interactive prompt. In a normal PowerShell window, `openclaw --version` can still work. From a script that goes through `cmd /c`, it does not.
+
+The CI run that went green calls the package entry with `node.exe` instead of the shim:
+
+```text
+node "%APPDATA%\npm\node_modules\openclaw\<bin from package.json>" --version
+```
+
+Suggested addition to the Windows OpenClaw install note:
+
+> If `openclaw` prints `'"node"' is not recognized`, you are hitting the npm cmd shim from inside `cmd /c`. Open a new PowerShell window and try again. From a script, run `node` on the package entry under `%APPDATA%\npm\node_modules\openclaw\` (the `bin` field in its `package.json`) instead of `openclaw.cmd`.
+
 ## Windows: `validate-templates.sh` schema check crashes under Windows Python
 
 `templates/scripts/validate-templates.sh` opens the settings schema with `json.load(open(path))` and no encoding. Under Git Bash on the Windows runner, Python 3.12 used cp1252 and the SchemaStore file failed:
