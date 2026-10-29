@@ -61,22 +61,31 @@ function Invoke-Step([string]$Name, [scriptblock]$Action) {
 }
 
 function Update-SessionPath {
-    $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $user = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = "$machine;$user;$env:Path"
-    $candidates = @(
+    # Rebuild PATH from the registry every time. Prepending onto $env:Path
+    # on each openclaw call grows it without bound; CreateProcess then fails
+    # with "Not enough memory resources are available".
+    $seen = @{}
+    $ordered = New-Object System.Collections.Generic.List[string]
+    $extras = @(
         (Join-Path $env:USERPROFILE ".local\bin"),
         (Join-Path $env:LOCALAPPDATA "OpenClaw\deps\portable-node"),
         (Join-Path $env:APPDATA "npm"),
         "C:\Program Files\nodejs"
     )
-    $portable = Join-Path $env:LOCALAPPDATA "OpenClaw\deps\portable-node\node.exe"
-    if (Test-Path $portable) {
-        $candidates = @((Split-Path $portable)) + $candidates
+    $base = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User")
+    ) -join ";"
+    foreach ($dir in @($extras + ($base -split ";"))) {
+        if (-not $dir) { continue }
+        $trim = $dir.Trim()
+        if (-not $trim) { continue }
+        $key = $trim.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        $ordered.Add($trim) | Out-Null
     }
-    foreach ($dir in $candidates) {
-        if ($dir -and (Test-Path $dir)) { $env:Path = "$dir;$env:Path" }
-    }
+    $env:Path = ($ordered -join ";")
 }
 
 function Resolve-Launch([string]$Name, [string[]]$UserArgs) {
@@ -149,12 +158,14 @@ function Invoke-Captured {
     $outText = $proc.StandardOutput.ReadToEnd()
     if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
         try { $proc.Kill($true) } catch { try { $proc.Kill() } catch {} }
+        $proc.Dispose()
         return @{ Exit = 124; Text = "TIMEOUT after ${TimeoutSec}s`n$outText" }
     }
     $proc.WaitForExit()
     $errText = $errTask.GetAwaiter().GetResult()
     $code = $proc.ExitCode
     if ($null -eq $code) { $code = 1 }
+    $proc.Dispose()
     return @{ Exit = $code; Text = ($outText + $errText) }
 }
 
@@ -204,9 +215,11 @@ function Stop-GatewayProcess {
     if ($script:GatewayProc -and -not $script:GatewayProc.HasExited) {
         try { Stop-Process -Id $script:GatewayProc.Id -Force -ErrorAction SilentlyContinue } catch {}
     }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match "node|openclaw" -and $_.CommandLine -match "gateway" } |
-        ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+    try {
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object { $_.Name -match "node|openclaw" -and $_.CommandLine -match "gateway" } |
+            ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
+    } catch {}
     $script:GatewayProc = $null
 }
 
