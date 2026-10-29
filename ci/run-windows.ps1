@@ -102,15 +102,15 @@ function Resolve-Launch([string]$Name, [string[]]$UserArgs) {
     if ($chosen -like "*.exe") {
         return @{ File = $chosen; Args = $UserArgs; ArgumentString = $null }
     }
-    # No extra quote wrapping. cmd /s /c ""tool.cmd"" makes the npm shim run the
-    # literal command "node", which Windows then cannot find.
+    # npm's cmd shim must be invoked with CALL. A bare `cmd /c openclaw.cmd`
+    # hits the shim's `endlocal & goto` trick and tries to execute `"node"`.
     if ($chosen -match '\s') { $tail = '"' + $chosen + '"' } else { $tail = $chosen }
     foreach ($arg in $UserArgs) {
         if ($null -eq $arg -or $arg -eq "") { continue }
         if ($arg -match '[\s"]') { $tail += ' "' + ($arg -replace '"', '""') + '"' }
         else { $tail += " $arg" }
     }
-    return @{ File = $env:ComSpec; Args = @(); ArgumentString = "/d /c $tail" }
+    return @{ File = $env:ComSpec; Args = @(); ArgumentString = "/d /c call $tail" }
 }
 
 function Invoke-Captured {
