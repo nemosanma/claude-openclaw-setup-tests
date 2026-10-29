@@ -22,7 +22,7 @@ if command -v python3 >/dev/null && python3 -c 'import jsonschema' 2>/dev/null; 
     for f in "$root"/claude-code/settings/*.json; do
       if python3 - "$schema" "$f" <<'PY'
 import json,sys,jsonschema
-s=json.load(open(sys.argv[1])); d=json.load(open(sys.argv[2]))
+s=json.load(open(sys.argv[1],encoding="utf-8")); d=json.load(open(sys.argv[2],encoding="utf-8"))  # utf-8: Windows Python defaults to cp1252
 errs=list(jsonschema.Draft7Validator(s).iter_errors(d))
 for e in errs: print("     ", "/".join(map(str,e.path)), e.message[:160])
 sys.exit(1 if errs else 0)

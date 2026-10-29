@@ -122,9 +122,11 @@ Suggested addition to the Windows OpenClaw install note:
 
 > If `openclaw` prints `'"node"' is not recognized`, you are hitting the npm cmd shim from inside `cmd /c`. Open a new PowerShell window and try again. From a script, run `node` on the package entry under `%APPDATA%\npm\node_modules\openclaw\` (the `bin` field in its `package.json`) instead of `openclaw.cmd`.
 
-## Windows: `validate-templates.sh` schema check crashes under Windows Python
+## Windows: `validate-templates.sh` schema check crashed under Windows Python
 
-`templates/scripts/validate-templates.sh` opens the settings schema with `json.load(open(path))` and no encoding. Under Git Bash on the Windows runner, Python 3.12 used cp1252 and the SchemaStore file failed:
+Fixed in the template pack after the first CI runs. `validate-templates.sh` now opens JSON with `encoding="utf-8"`. The matrix no longer sets `PYTHONUTF8` or `PYTHONIOENCODING`, so a later green Windows `validate-templates.sh` step is the script itself, not a CI locale override.
+
+Original failure: `templates/scripts/validate-templates.sh` opened the settings schema with `json.load(open(path))` and no encoding. Under Git Bash on the Windows runner, Python 3.12 used cp1252 and the SchemaStore file failed:
 
 ```text
 UnicodeDecodeError: 'charmap' codec can't decode byte 0x90 in position 76522

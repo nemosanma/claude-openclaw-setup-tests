@@ -656,8 +656,6 @@ try {
         $jqDir = Join-Path $LogDir "bin"
         $jqUnix = (& $bash --noprofile --norc -lc "cygpath -u '$jqDir'").Trim()
         $py = Get-Command python -ErrorAction SilentlyContinue
-        $env:PYTHONUTF8 = "1"
-        $env:PYTHONIOENCODING = "utf-8"
         $pipNote = "python not on PATH"
         if ($py) {
             $pip = Invoke-Captured -File $py.Source -TimeoutSec 180 -ArgumentList @("-m", "pip", "install", "--user", "jsonschema", "pyyaml")
