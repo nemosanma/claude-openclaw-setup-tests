@@ -99,34 +99,41 @@ function Resolve-Launch([string]$Name, [string[]]$UserArgs) {
         throw "Could not find an .exe or .cmd for $Name. Saw: $($candidates -join ' | ')"
     }
     if ($chosen -like "*.exe") {
-        return @{ File = $chosen; Args = $UserArgs }
+        return @{ File = $chosen; Args = $UserArgs; ArgumentString = $null }
     }
-    $parts = @('"' + $chosen + '"')
+    # cmd /d /s /c ""C:\path\tool.cmd" arg" — /s strips one pair of quotes.
+    $tail = '"' + $chosen + '"'
     foreach ($arg in $UserArgs) {
         if ($null -eq $arg -or $arg -eq "") { continue }
-        if ($arg -match '[\s"]') { $parts += '"' + ($arg -replace '"', '\"') + '"' }
-        else { $parts += $arg }
+        if ($arg -match '[\s"]') { $tail += ' "' + ($arg -replace '"', '""') + '"' }
+        else { $tail += " $arg" }
     }
-    return @{ File = $env:ComSpec; Args = @("/d", "/c", ($parts -join " ")) }
+    return @{ File = $env:ComSpec; Args = @(); ArgumentString = "/d /s /c `"$tail`"" }
 }
 
 function Invoke-Captured {
     param(
         [Parameter(Mandatory)][string]$File,
         [string[]]$ArgumentList = @(),
+        [string]$ArgumentString = "",
         [int]$TimeoutSec = 180,
         [string]$WorkingDirectory = $Root
     )
-    # One argument string so Start-Process does not split a bash -lc script on spaces.
-    $quoted = @()
-    foreach ($a in $ArgumentList) {
-        if ($null -eq $a) { continue }
-        if ($a -match '[\s"]') { $quoted += '"' + ($a.Replace('\', '\\').Replace('"', '\"')) + '"' }
-        else { $quoted += $a }
+    # One argument string so a bash script or cmd /c line is not split on spaces.
+    if ($ArgumentString) {
+        $argLine = $ArgumentString
+    } else {
+        $quoted = @()
+        foreach ($a in $ArgumentList) {
+            if ($null -eq $a) { continue }
+            if ($a -match '[\s"]') { $quoted += '"' + ($a.Replace('"', '""')) + '"' }
+            else { $quoted += $a }
+        }
+        $argLine = ($quoted -join " ")
     }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $File
-    $psi.Arguments = ($quoted -join " ")
+    $psi.Arguments = $argLine
     $psi.WorkingDirectory = $WorkingDirectory
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
@@ -161,6 +168,9 @@ function Invoke-GitBashFile([string]$Body, [int]$TimeoutSec = 120) {
 
 function Invoke-Tool([string]$Name, [string[]]$UserArgs, [int]$TimeoutSec = 180, [string]$WorkingDirectory = $Root) {
     $launch = Resolve-Launch $Name $UserArgs
+    if ($launch.ArgumentString) {
+        return Invoke-Captured -File $launch.File -ArgumentString $launch.ArgumentString -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
+    }
     return Invoke-Captured -File $launch.File -ArgumentList $launch.Args -TimeoutSec $TimeoutSec -WorkingDirectory $WorkingDirectory
 }
 
@@ -471,8 +481,11 @@ try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $launch.File
         $psi.WorkingDirectory = $Root
-        if ($launch.File -eq $env:ComSpec) {
-            $psi.Arguments = (($launch.Args -join " ") + " 1>`"$gwOut`" 2>`"$gwErr`"")
+        if ($launch.ArgumentString) {
+            # Keep the redirection inside cmd /c's quoted command so /s still strips one pair of quotes.
+            $cmdLine = $launch.ArgumentString
+            if ($cmdLine.EndsWith('"')) { $cmdLine = $cmdLine.Substring(0, $cmdLine.Length - 1) }
+            $psi.Arguments = $cmdLine + " 1>`"$gwOut`" 2>`"$gwErr`"" + '"'
             $psi.RedirectStandardOutput = $false
             $psi.RedirectStandardError = $false
         } else {
