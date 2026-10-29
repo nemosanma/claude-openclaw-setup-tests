@@ -67,7 +67,8 @@ function Update-SessionPath {
     $candidates = @(
         (Join-Path $env:USERPROFILE ".local\bin"),
         (Join-Path $env:LOCALAPPDATA "OpenClaw\deps\portable-node"),
-        (Join-Path $env:APPDATA "npm")
+        (Join-Path $env:APPDATA "npm"),
+        "C:\Program Files\nodejs"
     )
     $portable = Join-Path $env:LOCALAPPDATA "OpenClaw\deps\portable-node\node.exe"
     if (Test-Path $portable) {
@@ -101,14 +102,15 @@ function Resolve-Launch([string]$Name, [string[]]$UserArgs) {
     if ($chosen -like "*.exe") {
         return @{ File = $chosen; Args = $UserArgs; ArgumentString = $null }
     }
-    # cmd /d /s /c ""C:\path\tool.cmd" arg" — /s strips one pair of quotes.
-    $tail = '"' + $chosen + '"'
+    # No extra quote wrapping. cmd /s /c ""tool.cmd"" makes the npm shim run the
+    # literal command "node", which Windows then cannot find.
+    if ($chosen -match '\s') { $tail = '"' + $chosen + '"' } else { $tail = $chosen }
     foreach ($arg in $UserArgs) {
         if ($null -eq $arg -or $arg -eq "") { continue }
         if ($arg -match '[\s"]') { $tail += ' "' + ($arg -replace '"', '""') + '"' }
         else { $tail += " $arg" }
     }
-    return @{ File = $env:ComSpec; Args = @(); ArgumentString = "/d /s /c `"$tail`"" }
+    return @{ File = $env:ComSpec; Args = @(); ArgumentString = "/d /c $tail" }
 }
 
 function Invoke-Captured {
@@ -482,10 +484,8 @@ try {
         $psi.FileName = $launch.File
         $psi.WorkingDirectory = $Root
         if ($launch.ArgumentString) {
-            # Keep the redirection inside cmd /c's quoted command so /s still strips one pair of quotes.
-            $cmdLine = $launch.ArgumentString
-            if ($cmdLine.EndsWith('"')) { $cmdLine = $cmdLine.Substring(0, $cmdLine.Length - 1) }
-            $psi.Arguments = $cmdLine + " 1>`"$gwOut`" 2>`"$gwErr`"" + '"'
+            # /d /c <shim> gateway run 1>log 2>log  (path has no spaces on the runner)
+            $psi.Arguments = $launch.ArgumentString + " 1>`"$gwOut`" 2>`"$gwErr`""
             $psi.RedirectStandardOutput = $false
             $psi.RedirectStandardError = $false
         } else {
@@ -581,7 +581,9 @@ try {
     Invoke-Step "openclaw doctor (gateway stopped)" {
         $ran = Invoke-Tool "openclaw" @("doctor") 180
         $busy = $ran.Text -match "state database is busy"
-        $ok = (-not $busy) -and ($ran.Exit -ne 124) -and ($ran.Exit -ne 127) -and ($ran.Text.Trim().Length -gt 0)
+        $launchError = $ran.Text -match "not recognized|not a valid Win32"
+        $looksLikeDoctor = $ran.Text -match "Gateway|skill|memory|Doctor|OpenClaw"
+        $ok = (-not $busy) -and (-not $launchError) -and ($ran.Exit -ne 124) -and $looksLikeDoctor
         @{ Ok = [bool]$ok; Detail = "exit $($ran.Exit). $($ran.Text)" }
     }
 
