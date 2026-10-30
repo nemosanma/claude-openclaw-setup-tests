@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "autoUpdatesChannel": "stable",
+  "cleanupPeriodDays": 30,
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.openclaw/**)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Bash(sudo *)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(bash)",
+      "Bash(sh)",
+      "Bash(zsh)"
+    ],
+    "ask": [
+      "Bash(rm -rf *)",
+      "Bash(rm -r *)",
+      "Bash(git push *)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh",
+    "padding": 0
+  }
+}

@@ -1,0 +1,57 @@
+// OpenClaw personal assistant on Telegram — paired DMs only, approval for every
+// shell command, workspace-only file access. Builds on the safe baseline.
+// Prereqs: OPENCLAW_GATEWAY_TOKEN, TELEGRAM_BOT_TOKEN, and a model API key in your
+// environment (see .env.example). Tested against OpenClaw 2026.10.8.
+{
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    port: 18789,
+    auth: {
+      mode: "token",
+      token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+    },
+    tailscale: { mode: "off" },
+  },
+
+  discovery: { mdns: { mode: "off" } },
+
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-sonnet-5-5" },
+      timeoutSeconds: 300,
+      // Cost control: the built-in "heartbeat" wakes the agent every 30m by default.
+      // Every wake-up is a paid model call once a provider is configured.
+      heartbeat: {
+        every: "4h",
+        activeHours: { start: "08:00", end: "22:00", timezone: "UTC" }, // set your IANA zone, e.g. "America/New_York"
+      },
+    },
+  },
+
+  session: { dmScope: "per-channel-peer" },
+
+  channels: {
+    telegram: {
+      enabled: true,
+      // Bot token comes from TELEGRAM_BOT_TOKEN (default account). Do not paste it here.
+      dmPolicy: "pairing",                   // strangers must be approved: openclaw pairing approve telegram <CODE>
+      groupPolicy: "disabled",              // personal assistant: DMs only. Enabling groups makes it multi-user —
+                                             // read docs.openclaw.ai/channels/telegram first.
+    },
+  },
+
+  tools: {
+    profile: "messaging",
+    deny: ["group:automation", "sessions_spawn", "sessions_send"],
+    fs: { workspaceOnly: true },
+    exec: { security: "allowlist", ask: "always" },  // every command needs your approval
+    elevated: { enabled: false },
+    sessions: { visibility: "agent" },
+    agentToAgent: { enabled: false },
+  },
+
+  browser: { enabled: false },
+
+  memory: { search: { provider: "none" } },
+}

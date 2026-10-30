@@ -1,0 +1,55 @@
+// OpenClaw "safe baseline" — local-only, token-protected, no shell, no channels.
+// Start here, confirm everything works, THEN loosen one thing at a time.
+// Copy to ~/.openclaw/openclaw.json (back up the existing file first) and run:
+//   openclaw config validate && openclaw security audit
+// Tested against OpenClaw 2026.10.8. Keys can change between releases — if
+// `openclaw config validate` complains, run `openclaw doctor --fix`.
+{
+  gateway: {
+    mode: "local",
+    bind: "loopback",            // never "lan"/"custom" unless you have read the exposure runbook
+    port: 18789,
+    auth: {
+      mode: "token",
+      // Token is read from the environment, never stored in this file.
+      token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+    },
+    tailscale: { mode: "off" },
+  },
+
+  discovery: { mdns: { mode: "off" } },   // don't advertise the Gateway on your LAN
+
+  agents: {
+    defaults: {
+      // Pick a mid-priced model as default; switch per-chat with /model when needed.
+      // Check current ids with: openclaw models list --provider anthropic
+      model: { primary: "anthropic/claude-sonnet-5-5" },
+      timeoutSeconds: 300,
+      // Cost control: the built-in "heartbeat" wakes the agent every 30m by default.
+      // Every wake-up is a paid model call once a provider is configured.
+      heartbeat: {
+        every: "4h",
+        activeHours: { start: "08:00", end: "22:00", timezone: "UTC" }, // set your IANA zone, e.g. "America/New_York"
+      },
+    },
+  },
+
+  session: { dmScope: "per-channel-peer" },  // each sender gets an isolated DM session
+
+  tools: {
+    profile: "messaging",
+    // "read" lets the agent open SKILL.md files (skills do not work without it).
+    // fs.workspaceOnly keeps reads inside ~/.openclaw/workspace (tested: reading ~/.openclaw/openclaw.json is refused).
+    alsoAllow: ["read"],
+    deny: ["group:automation", "group:runtime", "write", "edit", "apply_patch", "sessions_spawn", "sessions_send"],
+    fs: { workspaceOnly: true },
+    exec: { security: "deny", ask: "always" },
+    elevated: { enabled: false },
+    sessions: { visibility: "agent" },
+    agentToAgent: { enabled: false },
+  },
+
+  browser: { enabled: false },              // turn on only for workflows that need it
+
+  memory: { search: { provider: "none" } }, // keyword recall without an embeddings API key
+}

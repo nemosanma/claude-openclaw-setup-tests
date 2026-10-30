@@ -1,0 +1,56 @@
+# Cross-platform test of the Claude Code + OpenClaw setup guide.
+# No repository secrets. Do not add API keys.
+name: Setup guide matrix
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: setup-guide-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_UPDATE_NOTIFIER: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unix suite (macOS and Linux)
+        if: runner.os != 'Windows'
+        run: bash ci/run-unix.sh
+
+      - name: Windows suite (native PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ci/run-windows.ps1
+
+      - name: Upload per-OS summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-summary-${{ matrix.os }}
+          path: |
+            test-summary.md
+            ci-logs/
+          if-no-files-found: warn
+          retention-days: 14
